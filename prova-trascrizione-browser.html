@@ -1,0 +1,193 @@
+<!-- Alessandro Castiglioni, agosto 2026 -->
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="author" content="Alessandro Castiglioni">
+<title>Prova — Trascrizione dal vivo nel browser (senza server)</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#1C1C1D;color:#F2F0EC;max-width:680px;margin:0 auto;padding:24px 20px 60px;}
+  h1{font-size:20px;margin-bottom:4px;}
+  .sotto{color:#A39C88;font-size:13.5px;margin-bottom:24px;line-height:1.5;}
+  .riquadro{background:#313132;border:1px solid #4A4A4B;border-radius:10px;padding:20px;margin-bottom:16px;}
+  .riquadro h3{margin:0 0 10px;font-size:15px;}
+  button{background:#be8301;color:#1B222B;border:none;padding:11px 20px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;margin-right:8px;margin-bottom:8px;}
+  button:disabled{opacity:.4;cursor:not-allowed;}
+  button.secondario{background:transparent;border:1px solid #6b6b6c;color:#F2F0EC;}
+  #stato{font-size:13px;line-height:1.6;white-space:pre-wrap;background:#000;padding:12px 14px;border-radius:6px;min-height:50px;margin-top:10px;max-height:200px;overflow-y:auto;}
+  .ok{color:#4C7A5D;}
+  .errore{color:#C0554A;}
+  .spia{display:inline-block;width:10px;height:10px;border-radius:50%;background:#6b6b6c;margin-right:6px;vertical-align:1px;}
+  .spia.attiva{background:#C0554A;animation:pulsa 1s infinite;}
+  @keyframes pulsa{0%,100%{opacity:1;}50%{opacity:.3;}}
+  .barra-esterna{background:#000;border-radius:5px;height:8px;overflow:hidden;margin-top:8px;}
+  .barra-interna{background:#be8301;height:100%;width:0%;transition:width .2s;}
+  #verbale-testo{background:#000;padding:16px;border-radius:6px;font-size:14.5px;line-height:1.7;min-height:100px;white-space:pre-wrap;}
+</style>
+</head>
+<body>
+  <h1>Prova — Trascrizione dal vivo, dentro il browser</h1>
+  <p class="sotto">Pagina isolata, non collegata ad Adunanza. La trascrizione avviene interamente su questo computer: l'audio non viene mai spedito da nessuna parte.</p>
+
+  <div class="riquadro">
+    <h3>1. Il modello Whisper</h3>
+    <p class="sotto" style="margin-bottom:10px;">Va scaricato una volta sola (rimane poi salvato nel browser per le volte successive).</p>
+    <button id="btn-carica-modello">⬇ Scarica il modello (circa 80 MB)</button>
+    <div class="barra-esterna"><div class="barra-interna" id="barra-modello"></div></div>
+    <div id="stato-modello" style="margin-top:6px;font-size:13px;color:#A39C88;">Non ancora scaricato.</div>
+  </div>
+
+  <div class="riquadro">
+    <h3>2. Cattura e trascrizione</h3>
+    <p class="sotto" style="margin-bottom:14px;">Al clic, scegli una scheda che sta riproducendo audio (es. un video in un'altra scheda) e spunta "Condividi audio scheda".</p>
+    <button id="btn-avvia" disabled>🎙 Avvia (finché non premi Ferma)</button>
+    <button id="btn-ferma" class="secondario" disabled>⏹ Ferma</button>
+    <div><span class="spia" id="spia"></span><span id="stato-breve">In attesa del modello.</span></div>
+    <div id="stato"></div>
+  </div>
+
+  <div class="riquadro">
+    <h3>3. Testo trascritto, via via che arriva</h3>
+    <div id="verbale-testo">(comparirà qui, un pezzo alla volta)</div>
+  </div>
+
+<script type="module">
+import { pipeline } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.0/+esm';
+
+const btnCaricaModello = document.getElementById('btn-carica-modello');
+const barraModello = document.getElementById('barra-modello');
+const statoModello = document.getElementById('stato-modello');
+const btnAvvia = document.getElementById('btn-avvia');
+const btnFerma = document.getElementById('btn-ferma');
+const statoEl = document.getElementById('stato');
+const statoBreve = document.getElementById('stato-breve');
+const spia = document.getElementById('spia');
+const verbaleTesto = document.getElementById('verbale-testo');
+
+function scrivi(msg, tipo){
+  const riga = document.createElement('div');
+  if(tipo) riga.className = tipo;
+  riga.textContent = new Date().toLocaleTimeString('it-IT') + '  ' + msg;
+  statoEl.appendChild(riga);
+  statoEl.scrollTop = statoEl.scrollHeight;
+}
+
+let trascrittore = null;
+let streamCatturato = null;
+let mediaRecorder = null;
+let inCorso = false;
+
+btnCaricaModello.addEventListener('click', async () => {
+  btnCaricaModello.disabled = true;
+  statoModello.textContent = 'Scaricamento in corso...';
+  try{
+    // Modello multilingue (NON quello con ".en", che capirebbe solo l'inglese) — "base" è un
+    // buon compromesso tra qualità e velocità per una prova su un computer normale.
+    trascrittore = await pipeline('automatic-speech-recognition', 'Xenova/whisper-base', {
+      progress_callback: (info) => {
+        if(info && typeof info.progress === 'number'){
+          barraModello.style.width = Math.round(info.progress) + '%';
+        }
+      }
+    });
+    statoModello.textContent = 'Modello pronto.';
+    statoModello.classList.add('ok');
+    barraModello.style.width = '100%';
+    btnAvvia.disabled = false;
+    statoBreve.textContent = 'Modello pronto — puoi avviare la cattura.';
+  }catch(err){
+    statoModello.textContent = 'Errore nello scaricamento: ' + err.message;
+    statoModello.classList.add('errore');
+    btnCaricaModello.disabled = false;
+  }
+});
+
+async function avviaCattura(){
+  statoEl.innerHTML = '';
+  verbaleTesto.textContent = '';
+  scrivi('Richiedo il permesso di condividere una scheda/finestra con audio...');
+
+  try{
+    streamCatturato = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: true,
+    });
+  }catch(err){
+    scrivi('Permesso negato: ' + err.message, 'errore');
+    return;
+  }
+
+  const tracceAudio = streamCatturato.getAudioTracks();
+  if(tracceAudio.length === 0){
+    scrivi('Nessun audio condiviso: nella finestra di condivisione serve spuntare "Condividi audio scheda". Riprova.', 'errore');
+    streamCatturato.getTracks().forEach(t=>t.stop());
+    return;
+  }
+  scrivi('Audio ricevuto, si parte.', 'ok');
+  streamCatturato.getVideoTracks().forEach(t=>t.stop());
+  const streamSoloAudio = new MediaStream(tracceAudio);
+
+  inCorso = true;
+  spia.classList.add('attiva');
+  statoBreve.textContent = 'In ascolto...';
+  btnAvvia.disabled = true;
+  btnFerma.disabled = false;
+
+  registraProssimoBlocchetto(streamSoloAudio);
+}
+
+function registraProssimoBlocchetto(streamSoloAudio){
+  if(!inCorso) return;
+  const pezzi = [];
+  mediaRecorder = new MediaRecorder(streamSoloAudio, {mimeType: 'audio/webm'});
+  mediaRecorder.ondataavailable = e => { if(e.data.size > 0) pezzi.push(e.data); };
+  mediaRecorder.onstop = async () => {
+    const blob = new Blob(pezzi, {type:'audio/webm'});
+    scrivi(`Blocchetto pronto (${(blob.size/1024).toFixed(1)} KB) — trascrizione in corso...`);
+    // Trascriviamo questo blocchetto SENZA aspettare che finisca prima di avviare il
+    // successivo: così la cattura continua senza vuoti mentre il computer trascrive.
+    trascriviBlocchetto(blob);
+    if(inCorso) registraProssimoBlocchetto(streamSoloAudio);
+  };
+  mediaRecorder.start();
+  setTimeout(()=>{ if(mediaRecorder && mediaRecorder.state==='recording') mediaRecorder.stop(); }, 8000);
+}
+
+async function trascriviBlocchetto(blob){
+  try{
+    const url = URL.createObjectURL(blob);
+    const risultato = await trascrittore(url, {
+      language: 'italian',
+      task: 'transcribe',
+    });
+    URL.revokeObjectURL(url);
+    const testo = (risultato && risultato.text || '').trim();
+    if(testo){
+      verbaleTesto.textContent += (verbaleTesto.textContent ? ' ' : '') + testo;
+      scrivi('Trascritto: "' + testo + '"', 'ok');
+    }else{
+      scrivi('(blocchetto silenzioso, nessun testo)');
+    }
+  }catch(err){
+    scrivi('Errore nella trascrizione di questo blocchetto: ' + err.message, 'errore');
+  }
+}
+
+function fermaCattura(){
+  inCorso = false;
+  if(mediaRecorder && mediaRecorder.state==='recording') mediaRecorder.stop();
+  if(streamCatturato){ streamCatturato.getTracks().forEach(t=>t.stop()); }
+  streamCatturato = null;
+  spia.classList.remove('attiva');
+  statoBreve.textContent = 'Fermato.';
+  btnAvvia.disabled = false;
+  btnFerma.disabled = true;
+  scrivi('Cattura fermata.', 'ok');
+}
+
+btnAvvia.addEventListener('click', avviaCattura);
+btnFerma.addEventListener('click', fermaCattura);
+</script>
+</body>
+</html>
