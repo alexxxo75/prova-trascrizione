@@ -1,3 +1,4 @@
+
 <!-- Alessandro Castiglioni, agosto 2026 -->
 <!DOCTYPE html>
 <html lang="it">
@@ -151,7 +152,7 @@ function registraProssimoBlocchetto(streamSoloAudio){
     if(inCorso) registraProssimoBlocchetto(streamSoloAudio);
   };
   mediaRecorder.start();
-  setTimeout(()=>{ if(mediaRecorder && mediaRecorder.state==='recording') mediaRecorder.stop(); }, 8000);
+  setTimeout(()=>{ if(mediaRecorder && mediaRecorder.state==='recording') mediaRecorder.stop(); }, 20000);
 }
 
 async function trascriviBlocchetto(blob){
